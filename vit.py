@@ -1,7 +1,7 @@
 from typing import Tuple
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as Fn
 from einops.layers.torch import Rearrange
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -15,7 +15,7 @@ class Attention(nn.Module):
         dim_head: int = 64,
         dropout: float = 0.0,
         use_flash_attn=True,
-        return_cls_attn: bool = False,
+        return_last_block_attn: bool = False,
     ):
         super().__init__()
 
@@ -24,7 +24,7 @@ class Attention(nn.Module):
         self.p_dropout = dropout
         self.scale = dim_head**-0.5
         no_project = heads == 1 and dim_head == dim
-        self.return_cls_attn = return_cls_attn
+        self.return_last_block_attn = return_last_block_attn
 
         self.ln1 = nn.LayerNorm(dim)
         self.wq = nn.Linear(dim, inner_dim, bias=False)
@@ -51,7 +51,7 @@ class Attention(nn.Module):
                 SDPBackend.CUDNN_ATTENTION,
             ]
         ):
-            out = F.scaled_dot_product_attention(
+            out = Fn.scaled_dot_product_attention(
                 q,
                 k,
                 v,
@@ -78,23 +78,22 @@ class Attention(nn.Module):
             lambda t: self.split_emb_dim(t), [q, k, v]
         )  # q, k, v: (B, H, N, I / H)
 
-        cls_attn = None
-        if self.use_flash_attn and not self.return_cls_attn:
+        last_block_attn = None
+        if self.use_flash_attn and not self.return_last_block_attn:
             out = self.flash_attn(q, k, v)  # (B, H, N, I / H)
         else:
             logits = torch.matmul(q, k.transpose(-1, -2)) * self.scale  # (B, H, N, N)
-            attn = F.softmax(logits, dim=-1)  # (B, H, N, N)
+            attn = Fn.softmax(logits, dim=-1)  # (B, H, N, N)
 
-            if self.return_cls_attn:
-                cls_attn = attn[:, :, 0, :]  # (B, H, N)
-                cls_attn = cls_attn[:, :, 1:]  # (B, H, N - 1)
+            if self.return_last_block_attn:
+                last_block_attn = attn  # (B, H, N, N)
 
             attn = self.drop(attn)  # (B, H, N, N)
             out = torch.matmul(attn, v)  # (B, H, N, I / H)
 
         out = self.merge_emb_dim(out)  # (B, N, I)
         out = self.project(out)  # (B, N, E)
-        return out, cls_attn
+        return out, last_block_attn
 
 
 class FeedForward(nn.Module):
@@ -132,7 +131,7 @@ class Transformer(nn.Module):
         mlp_dim: int,
         dropout: float = 0.0,
         use_flash_attn: bool = True,
-        return_cls_attn: bool = False,
+        return_last_block_attn: bool = False,
     ):
         super().__init__()
         self.layers = nn.ModuleList([])
@@ -146,7 +145,7 @@ class Transformer(nn.Module):
                             dim_head=dim_head,
                             dropout=dropout,
                             use_flash_attn=use_flash_attn,
-                            return_cls_attn=False,  # we only want the [CLS] attn from the last block
+                            return_last_block_attn=False,  # we only want the [CLS] attn from the last block
                         ),
                         FeedForward(dim=dim, hidden_dim=mlp_dim, dropout=dropout),
                     ]
@@ -161,7 +160,7 @@ class Transformer(nn.Module):
                         dim_head=dim_head,
                         dropout=dropout,
                         use_flash_attn=use_flash_attn,
-                        return_cls_attn=return_cls_attn,
+                        return_last_block_attn=return_last_block_attn,
                     ),
                     FeedForward(dim=dim, hidden_dim=mlp_dim, dropout=dropout),
                 ]
@@ -174,13 +173,15 @@ class Transformer(nn.Module):
         x: (B, N, E)
         :return: (B, N, E)
         """
-        cls_attn = None
+        last_block_attn = None
         for attn, ff in self.layers:
-            x_attn, cls_attn = attn(x)  # x_attn: (B, N, E), cls_attn: (B, H, N - 1)
+            x_attn, last_block_attn = attn(
+                x
+            )  # x_attn: (B, N, E), last_block_attn: (B, H, N, N)
             x = x_attn + x  # (B, N, E)
             x = ff(x) + x  # (B, N, E)
         x = self.ln1(x)  # (B, N, E)
-        return x, cls_attn
+        return x, last_block_attn
 
 
 class PatchEmbedding(nn.Module):
@@ -229,6 +230,7 @@ class ViViT(nn.Module):
         dim: int,
         depth: int,
         heads: int,
+        dim_head: int,
         mlp_dim: int,
         dropout: float = 0.0,
         use_flash_attn: bool = True,
@@ -255,38 +257,135 @@ class ViViT(nn.Module):
             dim=dim,
             depth=depth,
             heads=heads,
-            dim_head=dim,
+            dim_head=dim_head,
             mlp_dim=mlp_dim,
             dropout=dropout,
             use_flash_attn=use_flash_attn,
-            return_cls_attn=return_cls_attn,
+            return_last_block_attn=return_cls_attn,
         )
 
         self.l1 = nn.Linear(dim, n_classes)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        x: (B, T, C, H, W)
-        :return:
+        x: (B, F, C, H, W)
+        :return: [(B, num_classes), (B, Heads, F * N)]
         """
-        B, T, C, H, W = x.shape
+        B, F, C, H, W = x.shape
 
-        # N = H / PH * W / PW, the number of patches
+        # N = H / PH * W / PW * C, the number of patches
         x = self.patch_emb(x)  # (B, F, N, E)
         x = x + self.pos_enc  # (B, F, N, E)
         x = self.flatten_frames(x)  # (B, F * N, E)
 
         cls_tokens = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)  # (B, F * N + 1, E)
-        x, cls_attn = self.transformer(
+        x, last_block_attn = self.transformer(
             x
-        )  # x: (B, F * N + 1, E), cls_attn: (B, H, F * N), H is the number of attention heads here
+        )  # x: (B, F * N + 1, E), last_block_attn: (B, Heads, F * N + 1, F * N + 1)
 
         # fetching [CLS] token
         x = x[:, 0]  # (B, E)
         x = self.l1(x)  # (B, num_classes)
 
+        cls_attn = last_block_attn[:, :, 0, :]  # (B, Heads, F * N + 1)
+        cls_attn = cls_attn[:, :, 1:]  # (B, Heads, F * N)
+
         return x, cls_attn
 
 
-# class HierarchicalViT(nn.Module):
+class HierarchicalViT(nn.Module):
+    def __init__(
+        self,
+        image_size: Tuple[int, int],
+        patch_size: Tuple[int, int],
+        frames: int,
+        channels: int,
+        n_classes: int,
+        dim: int,
+        depth1: int,
+        depth2: int,
+        heads1: int,
+        heads2: int,
+        dim_head1: int,
+        dim_head2: int,
+        mlp_dim1: int,
+        mlp_dim2: int,
+        dropout: float = 0.0,
+        use_flash_attn: bool = True,
+        return_cls_attn: bool = False,
+    ):
+        super().__init__()
+
+        ih, iw = image_size
+        ph, pw = patch_size
+        n_patches = ih // ph * iw // pw
+
+        self.patch_emb = PatchEmbedding(patch_size, channels, dim)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
+        self.pos_enc = nn.Parameter(torch.randn(1, frames, n_patches + 1, dim))
+        self.flatten_frames = Rearrange("b f n e -> b (f n) e")
+
+        self.t1 = Transformer(
+            dim=dim,
+            depth=depth1,
+            heads=heads1,
+            dim_head=dim_head1,
+            mlp_dim=mlp_dim1,
+            dropout=dropout,
+            use_flash_attn=use_flash_attn,
+            return_last_block_attn=return_cls_attn,
+        )
+
+        self.unflatten_attn = Rearrange(
+            "b heads (fq nq) (fk nk) -> b heads fq nq fk nk", fq=frames, fk=frames
+        )
+        self.unflatten_t1_out = Rearrange("b (f n) e -> b f n e", f=frames)
+
+        self.t2 = Transformer(
+            dim=dim,
+            depth=depth2,
+            heads=heads2,
+            dim_head=dim_head2,
+            mlp_dim=mlp_dim2,
+            dropout=dropout,
+            use_flash_attn=use_flash_attn,
+            return_last_block_attn=False,  # [CLS] vs patch attention only exists in first transformer's attention layers
+        )
+
+        self.l1 = nn.Linear(dim, n_classes)
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        x: (B, F, C, H, W)
+        :return: [(B, num_classes), (B, Heads, F * N)]
+        """
+        B, F, C, H, W = x.shape
+
+        # N = H / PH * W / PW * C, the number of patches
+        x = self.patch_emb(x)  # (B, F, N, E)
+        cls_tokens = self.cls_token.expand(B, F, 1, -1)
+        x = torch.cat((cls_tokens, x), dim=2)  # (B, F, N + 1, E)
+        x = x + self.pos_enc  # (B, F, N + 1, E)
+        x = self.flatten_frames(x)  # (B, F * (N + 1), E)
+
+        x, last_block_attn = self.t1(
+            x
+        )  # x: (B, F * (N + 1), E), last_block_attn: (B, Heads, F * (N + 1), F * (N + 1))
+
+        cls_attn = self.unflatten_attn(
+            last_block_attn
+        )  # (B, Heads, F, N + 1, F, N + 1)
+        cls_attn = cls_attn[:, :, :, 0, :, :]  # (B, Heads, F, F, N + 1)
+        cls_attn = cls_attn[:, :, :, :, 1:]  # (B, Heads, F, F, N)
+        cls_attn = cls_attn.diagonal(dim1=2, dim2=3)  # (B, Heads, N, F)
+        cls_attn = cls_attn.permute(0, 1, 3, 2)  # (B, Heads, F, N)
+
+        x = self.unflatten_t1_out(x)  # (B, F, N + 1, E)
+        x = x[:, :, 0, :]  # (B, F, E)
+
+        x, _ = self.t2(x)
+        x = x.mean(dim=1)  # (B, E)
+
+        x = self.l1(x)
+        return x, cls_attn
