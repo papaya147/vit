@@ -11,21 +11,21 @@
 
 cd $SLURM_SUBMIT_DIR
 
+# 1. Threading Fix
 export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-module purge
-module load conda
-eval "$(conda shell.bash hook)"
-conda activate /home1/adsrivat/.conda/envs/.venv
+# 2. Define the EXACT path to your Python binary
+# (We bypass 'conda activate' entirely to avoid shell errors)
+export PY_BIN=/home1/adsrivat/.conda/envs/.venv/bin/python
 
-# Since you ran 'wandb login' on the login node, it should work automatically.
-# However, if you get network errors, uncomment the line below:
-# export WANDB_MODE=offline
-
+# 3. Sanity Checks
 echo "Job started on $(hostname) at $(date)"
 nvidia-smi
 
-echo "Python: $(which python)"
-python -c "import torch; print(f'Torch: {torch.__version__}')"
+echo "------------------------------------------------------"
+echo "Using Python binary at: $PY_BIN"
+$PY_BIN -c "import torch; print(f'Torch version: {torch.__version__}')"
+echo "------------------------------------------------------"
 
-python main.py
+# 4. Run your script using the specific binary
+$PY_BIN main.py
