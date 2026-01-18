@@ -117,6 +117,7 @@ def train(
         model.train()
         for obs, g, a in train_loader:
             obs, g = preprocess(args, obs, g)
+            a = a.to(device=device)
             pred_a, cls_attn = model(obs)
 
             # behavior cloning loss
@@ -145,6 +146,7 @@ def train(
         with torch.no_grad():
             for obs, g, a in val_loader:
                 obs, g = preprocess(args, obs, g, augment=False)
+                a = a.to(device=device)
                 pred_a, cls_attn = model(obs)
 
                 # behavior cloning loss
