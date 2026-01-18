@@ -64,7 +64,7 @@ class Attention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        x: (B, T, E)
+        :param x: (B, T, E)
         :return: (B, T, E)
         """
         B, T, E = x.shape
@@ -110,7 +110,7 @@ class FeedForward(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (B, T, E)
+        :param x: (B, T, E)
         :return: (B, T, E)
         """
         x = self.ln1(x)  # (B, T, E)
@@ -171,7 +171,7 @@ class Transformer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        x: (B, T, E)
+        :param x: (B, T, E)
         :return: (B, T, E)
         """
         last_block_attn = None
@@ -204,7 +204,7 @@ class PatchEmbedding(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (B, F, C, H, W)
+        :param x: (B, F, C, H, W)
         :return: (B, H / P1, W / P2, E)
         """
         # T = H / PH * W / PW * C, the number of patches/tokens
@@ -270,7 +270,7 @@ class ViViT(nn.Module):
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         x: (B, F, C, H, W)
-        :return: [(B, num_classes), (B, Heads, F * N)]
+        :return: (B, num_classes), (B, Heads, F * N)
         """
         B, F, C, H, W = x.shape
 
@@ -360,8 +360,8 @@ class FactorizedViViT(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        x: (B, F, C, H, W)
-        :return: [(B, num_classes), (B, Heads, F * N)]
+        :param x: (B, F, C, H, W)
+        :return: (B, num_classes), (B, Heads, F * N)
         """
         B, F, C, H, W = x.shape
 
