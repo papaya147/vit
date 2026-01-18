@@ -246,7 +246,7 @@ def main():
 
         observations, gaze_coords, actions = atari.load_data(
             f"{args.atari_dataset_folder}/{game}/num_episodes_20_fs4_human.pt",
-            device="mps",
+            device=device,
         )
         B, F, C, H, W = observations.shape
 
