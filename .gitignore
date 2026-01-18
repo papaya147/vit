@@ -1,4 +1,4 @@
 .venv
-dataset
+atari-dataset
 models
 wandb
