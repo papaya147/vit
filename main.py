@@ -1,3 +1,4 @@
+import gc
 import random
 from dataclasses import dataclass
 from typing import Tuple
@@ -183,6 +184,8 @@ def train(
     save_path = f"{args.save_folder}/{args.game}/final.pt"
     torch.save(model.state_dict(), save_path)
 
+    run.finish()
+
 
 def preprocess(
     args: Config,
@@ -256,6 +259,13 @@ def main():
         )
 
         train(args, observations, gaze_coords, actions)
+
+        del observations
+        del gaze_coords
+        del actions
+
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
