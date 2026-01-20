@@ -37,7 +37,7 @@ class Config:
     save_folder: str = "./models"
 
     # gaze
-    gaze_gamma: int = 15
+    gaze_sigma: int = 5
     gaze_beta: float = 0.99
     gaze_alpha: float = 0.7
 
@@ -351,7 +351,7 @@ def preprocess(
 
     gaze_masks = gaze.decaying_gaussian_mask(
         gaze_coords,
-        gamma=args.gaze_gamma,
+        sigma=args.gaze_sigma,
         shape=(H, W),
         beta=args.gaze_beta,
         alpha=args.gaze_alpha,
