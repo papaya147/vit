@@ -6,7 +6,6 @@ from typing import List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from numpy import dtype
 
 
 def list_games(path: str) -> List[str]:
@@ -107,15 +106,17 @@ def stack_observations_and_gaze_coords(
     )
 
 
-def load_data(dir: str, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def load_data(
+    folder: str, device: str
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Load Atari data for training and testing.
 
-    :param dir: The folder of the Atari game dataset.
+    :param folder: The folder of the Atari game dataset.
     :param device: The device to use.
     :return: (B, F, C, H, W), (B, F, layers, 2), (B)
     """
-    files_list = [p for p in Path(dir).iterdir() if p.is_file()]
+    files_list = [p for p in Path(folder).iterdir() if p.is_file()]
     dataset = torch.load(files_list[0], weights_only=False)
 
     observations = torch.from_numpy(dataset["observations"]).to(
