@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn.functional as Fn
 import torch.optim as optim
+import wandb
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
@@ -20,7 +21,6 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 import atari
 import augmentation
 import gaze
-import wandb
 from device import device
 from vivit import FactorizedViViT
 
@@ -36,12 +36,12 @@ class Config:
     atari_dataset_folder: str = "../atari-dataset"
     use_plots: bool = False
     save_folder: str = "./models"
-    version: int = 1
+    version: int = 3
     seed: int = 42
 
     # gaze
     gaze_sigma: int = 5
-    gaze_beta: float = 0.9
+    gaze_beta: float = 0.99
     gaze_alpha: float = 0.7
 
     # augmentation
