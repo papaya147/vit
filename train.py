@@ -38,7 +38,7 @@ class Config:
 
     # gaze
     gaze_sigma: int = 5
-    gaze_beta: float = 0.99
+    gaze_beta: float = 0.9
     gaze_alpha: float = 0.7
 
     # augmentation
@@ -48,13 +48,13 @@ class Config:
     # transformer arch
     spatial_patch_size: Tuple[int, int] = (6, 6)
     embedding_dim: int = 256
-    spatial_depth: int = 3
-    temporal_depth: int = 2
+    spatial_depth: int = 4
+    temporal_depth: int = 4
     spatial_heads: int = 8
     temporal_heads: int = 8
     inner_dim: int = 64
     mlp_dim: int = 256
-    dropout: float = 0.1
+    dropout: float = 0.0
 
     # hyperparams
     learning_rate: float = 1e-4
@@ -207,17 +207,18 @@ def train(
         dropout=args.dropout,
         use_flash_attn=False,
         return_cls_attn=True,
-        use_temporal_mask=True,
+        use_temporal_mask=False,
     ).to(device=device)
-    optimizer = optim.AdamW(
-        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
-    )
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=args.scheduler_factor,
-        patience=args.scheduler_patience,
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    # optimizer = optim.AdamW(
+    #     model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
+    # )
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer,
+    #     mode="min",
+    #     factor=args.scheduler_factor,
+    #     patience=args.scheduler_patience,
+    # )
 
     dataset = TensorDataset(observations, gaze_masks, actions)
     train_size = int(args.train_pct * len(dataset))
@@ -248,7 +249,7 @@ def train(
             pred_a, cls_attn = model(obs)
 
             # behavior cloning loss
-            policy_loss = Fn.cross_entropy(pred_a, a, weight=class_weights)
+            policy_loss = Fn.cross_entropy(pred_a, a)  # weight=class_weights
 
             # gaze loss
             cls_attn = cls_attn.mean(dim=2)  # (B, F, T)
@@ -279,7 +280,7 @@ def train(
                 pred_a, cls_attn = model(obs)
 
                 # behavior cloning loss
-                policy_loss = Fn.cross_entropy(pred_a, a, weight=class_weights)
+                policy_loss = Fn.cross_entropy(pred_a, a)  # weight=class_weights
 
                 # gaze loss
                 cls_attn = cls_attn.mean(dim=2)  # (B, F, T)
@@ -297,7 +298,7 @@ def train(
                 metrics["val_gaze_loss"] += gaze_loss.item() * curr_batch_size
                 metrics["val_acc"] += acc.item()
 
-        scheduler.step(metrics["val_loss"])
+        # scheduler.step(metrics["val_loss"])
 
         # testing
         mean_reward = test_agent(args, model)
