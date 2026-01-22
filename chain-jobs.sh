@@ -12,6 +12,6 @@ echo "Job 1 ID: $JOB_ID"
 
 for i in $(seq 2 $NUM_JOBS); do
     echo "Submitting Job $i (dependent on $JOB_ID)..."
-    JOB_ID=$(sbatch --parsable --dependency=afterany:$JOB_ID $JOB_SCRIPT)
+    JOB_ID=$(sbatch --parsable --dependency=aftercorr:$JOB_ID $JOB_SCRIPT)
     echo "Job $i ID: $JOB_ID"
 done
