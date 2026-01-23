@@ -10,18 +10,20 @@ import numpy as np
 import torch
 import torch.nn.functional as Fn
 import torch.optim as optim
-import wandb
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
     ResizeObservation,
 )
 from torch.amp import GradScaler, autocast
+from torch.nn.utils import clip_grad_norm_
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
 import atari
 import augmentation
 import gaze
+import wandb
 from device import device
 from vivit import FactorizedViViT
 
@@ -61,7 +63,7 @@ class Config:
     dropout: float = 0.1
 
     # hyperparams
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     epochs: int = 1000
     train_pct: float = 0.8
     batch_size: int = 32
@@ -69,6 +71,10 @@ class Config:
     weight_decay: float = 0.01
     scheduler_factor: float = 0.5
     scheduler_patience: int = 5
+    clip_grad_norm: float = 1.0
+    warmup_epochs: int = 10
+    warmup_start_factor: float = 1e-10
+    min_learning_rate: float = 1e-6
 
     # testing
     test_episodes: int = 10
@@ -263,11 +269,23 @@ def train(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
     scaler = GradScaler()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+
+    warmup_scheduler = LinearLR(
         optimizer,
-        mode="min",
-        factor=args.scheduler_factor,
-        patience=args.scheduler_patience,
+        start_factor=args.warmup_start_factor,
+        end_factor=1.0,
+        total_iters=args.warmup_epochs,
+    )
+
+    decay_epochs = args.epochs - args.warmup_epochs
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer, T_max=decay_epochs, eta_min=args.min_learning_rate
+    )
+
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[args.warmup_epochs],
     )
 
     start_epoch, best_reward, wandb_id = load_checkpoint(
@@ -358,6 +376,8 @@ def train(
                 loss = policy_loss + args.lambda_gaze * gaze_loss
 
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             scaler.step(optimizer)
             scaler.update()
 
@@ -399,7 +419,7 @@ def train(
                 metrics["val_gaze_loss"] += gaze_loss.item() * curr_batch_size
                 metrics["val_acc"] += acc.item()
 
-        scheduler.step(metrics["val_loss"])
+        scheduler.step()
 
         # testing
         mean_reward = test_agent(args, model)
@@ -410,6 +430,7 @@ def train(
         }
         log_data["epoch"] = e
         log_data["reward"] = mean_reward
+        log_data["learning_rate"] = optimizer.param_groups[0]["lr"]
 
         run.log(data=log_data)
 
