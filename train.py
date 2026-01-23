@@ -61,10 +61,10 @@ class Config:
     dropout: float = 0.1
 
     # hyperparams
-    learning_rate: float = 16e-4
+    learning_rate: float = 1e-4
     epochs: int = 1000
     train_pct: float = 0.8
-    batch_size: int = 512
+    batch_size: int = 32
     lambda_gaze: float = 1.0
     weight_decay: float = 0.01
     scheduler_factor: float = 0.5
@@ -255,7 +255,7 @@ def train(
         dim_head=args.inner_dim,
         mlp_dim=args.mlp_dim,
         dropout=args.dropout,
-        use_flash_attn=False,
+        use_flash_attn=True,
         return_cls_attn=True,
         use_temporal_mask=True,
     ).to(device=device)
@@ -311,14 +311,15 @@ def train(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=8,
         pin_memory=True,
+        persistent_workers=True,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=8,
         pin_memory=True,
     )
 
