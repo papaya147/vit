@@ -39,7 +39,7 @@ class Config:
     atari_dataset_folder: str = "./atari-dataset"
     use_plots: bool = False
     save_folder: str = "./models"
-    version: int = 2
+    version: int = 3
     seed: int = 42
 
     # gaze
