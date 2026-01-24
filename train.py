@@ -39,7 +39,7 @@ class Config:
     atari_dataset_folder: str = "./atari-dataset"
     use_plots: bool = False
     save_folder: str = "./models"
-    version: int = 3
+    version: int = 1
     seed: int = 42
 
     # gaze
@@ -160,11 +160,9 @@ def save_checkpoint(
     wandb_id: str,
     model: torch.nn.Module,
     optimizer: optim.Optimizer,
+    scaler: GradScaler,
     scheduler: SequentialLR = None,
 ):
-    """
-    Saves the complete training state to a file.
-    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     scheduler_state = None
@@ -176,8 +174,15 @@ def save_checkpoint(
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler_state,
+        "scaler_state_dict": scaler.state_dict(),
         "best_reward": best_reward,
         "wandb_id": wandb_id,
+        "rng_states": {
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all(),
+            "numpy": np.random.get_state(),
+            "python": random.getstate(),
+        },
     }
     torch.save(checkpoint_data, path)
 
@@ -186,24 +191,31 @@ def load_checkpoint(
     path: str,
     model: torch.nn.Module,
     optimizer: optim.Optimizer,
+    scaler: GradScaler,
     scheduler: SequentialLR = None,
 ) -> Tuple[int, float, str | None]:
-    """
-    Attempts to load a checkpoint.
-    Returns: (start_epoch, best_reward, wandb_id)
-    If no checkpoint is found, returns defaults: (0, -inf, None)
-    """
     if not os.path.exists(path):
         return 0, -float("inf"), None
 
     print(f"--> Found checkpoint! Resuming from {path}")
     checkpoint = torch.load(path, map_location=device)
 
-    # Load states
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    if "scaler_state_dict" in checkpoint:
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
+
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+    # Restore RNGs if available
+    if "rng_states" in checkpoint:
+        rng = checkpoint["rng_states"]
+        torch.set_rng_state(rng["torch"])
+        torch.cuda.set_rng_state_all(rng["cuda"])
+        np.random.set_state(rng["numpy"])
+        random.setstate(rng["python"])
 
     # Extract metadata
     start_epoch = checkpoint["epoch"] + 1
@@ -289,7 +301,7 @@ def train(
     )
 
     start_epoch, best_reward, wandb_id = load_checkpoint(
-        resume_path, model, optimizer, scheduler
+        resume_path, model, optimizer, scaler, scheduler
     )
 
     if wandb_id is None:
@@ -441,7 +453,7 @@ def train(
             torch.save(model.state_dict(), save_path)
 
         save_checkpoint(
-            resume_path, e, best_reward, wandb_id, model, optimizer, scheduler
+            resume_path, e, best_reward, wandb_id, model, optimizer, scaler, scheduler
         )
 
     save_path = f"{args.save_folder}/{args.game}/final.pt"
