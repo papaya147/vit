@@ -212,7 +212,7 @@ def load_checkpoint(
     # Restore RNGs if available
     if "rng_states" in checkpoint:
         rng = checkpoint["rng_states"]
-        torch.set_rng_state(rng["torch"])
+        torch.set_rng_state(rng["torch"].cpu())
         torch.cuda.set_rng_state_all(rng["cuda"])
         np.random.set_state(rng["numpy"])
         random.setstate(rng["python"])
