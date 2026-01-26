@@ -1,3 +1,4 @@
+import math
 import os
 import random
 import sys
@@ -39,7 +40,7 @@ class Config:
     atari_dataset_folder: str = "./atari-dataset"
     use_plots: bool = False
     save_folder: str = "./models"
-    version: int = 1
+    version: int = 2
     seed: int = 42
 
     # gaze
@@ -48,11 +49,11 @@ class Config:
     gaze_alpha: float = 0.7
 
     # augmentation
-    augment_shift_pad: int = 4
-    augment_noise_std: float = 0.005
+    augment_shift_pad: int = 6
+    augment_noise_std: float = 0.01
 
     # transformer arch
-    spatial_patch_size: Tuple[int, int] = (7, 7)
+    spatial_patch_size: Tuple[int, int] = (6, 6)
     embedding_dim: int = 128
     spatial_depth: int = 3
     temporal_depth: int = 2
@@ -67,7 +68,7 @@ class Config:
     epochs: int = 1000
     train_pct: float = 0.8
     batch_size: int = 32
-    lambda_gaze: float = 10.0
+    lambda_gaze: float = 10
     weight_decay: float = 0.1
     scheduler_factor: float = 0.5
     scheduler_patience: int = 5
@@ -227,6 +228,39 @@ def load_checkpoint(
     return start_epoch, best_reward, wandb_id
 
 
+def calculate_loss(
+    model: torch.nn.Module,
+    class_weights: torch.Tensor,
+    obs: torch.Tensor,
+    g: torch.Tensor,
+    a: torch.Tensor,
+):
+    with autocast(device_type="cuda", dtype=torch.float16):
+        pred_a, cls_attn = model(obs)
+
+        # behavior cloning loss
+        policy_loss = Fn.cross_entropy(pred_a, a, weight=class_weights)
+
+        # gaze loss
+        cls_attn = cls_attn.mean(dim=2)  # (B, F, T)
+        _, F, T = cls_attn.shape
+        root_T = int(math.sqrt(T))
+        cls_attn = cls_attn.view(-1, F, root_T, root_T)
+
+        _, _, GH, GW = g.shape
+        cls_attn = Fn.interpolate(
+            cls_attn,
+            size=(GH, GW),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        gaze_loss = torch.norm(cls_attn - g, p="fro", dim=(1, 2)) ** 2
+        gaze_loss = gaze_loss.mean()
+
+        return pred_a, policy_loss, gaze_loss
+
+
 def train(
     args: Config,
     observations: torch.Tensor,
@@ -309,7 +343,7 @@ def train(
         wandb_id = wandb.util.generate_id()
 
     group_id = (
-        f"v1_"
+        f"v{args.version}_"
         f"lr{args.learning_rate:.0e}_"
         f"lam{args.lambda_gaze}_"
         f"dim{args.embedding_dim}_"
@@ -375,18 +409,10 @@ def train(
 
             optimizer.zero_grad()
 
-            with autocast(device_type="cuda", dtype=torch.float16):
-                pred_a, cls_attn = model(obs)
-
-                # behavior cloning loss
-                policy_loss = Fn.cross_entropy(pred_a, a, weight=class_weights)
-
-                # gaze loss
-                cls_attn = cls_attn.mean(dim=2)  # (B, F, T)
-                gaze_loss = torch.norm(cls_attn - g, p="fro", dim=(1, 2)) ** 2
-                gaze_loss = gaze_loss.mean()
-
-                loss = policy_loss + args.lambda_gaze * gaze_loss
+            pred_a, policy_loss, gaze_loss = calculate_loss(
+                model, class_weights, obs, g, a
+            )
+            loss = policy_loss + args.lambda_gaze * gaze_loss
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -410,18 +436,10 @@ def train(
                 obs, g = preprocess(args, obs, g, augment=False)
                 a = a.to(device=device)
 
-                with autocast(device_type="cuda", dtype=torch.float16):
-                    pred_a, cls_attn = model(obs)
-
-                    # behavior cloning loss
-                    policy_loss = Fn.cross_entropy(pred_a, a, weight=class_weights)
-
-                    # gaze loss
-                    cls_attn = cls_attn.mean(dim=2)  # (B, F, T)
-                    gaze_loss = torch.norm(cls_attn - g, p="fro", dim=(1, 2)) ** 2
-                    gaze_loss = gaze_loss.mean()
-
-                    loss = policy_loss + args.lambda_gaze * gaze_loss
+                pred_a, policy_loss, gaze_loss = calculate_loss(
+                    model, class_weights, obs, g, a
+                )
+                loss = policy_loss + args.lambda_gaze * gaze_loss
 
                 acc = (pred_a.argmax(dim=1) == a).float().sum()
 
@@ -505,24 +523,24 @@ def preprocess(
         atari.plot_frames(aug_observations[random_example])
         atari.plot_frames(aug_gaze_masks.unsqueeze(2)[random_example])
 
-    gaze_mask_patches = gaze.patchify(
-        aug_gaze_masks, patch_size=args.spatial_patch_size
-    )
-    B, F, gridR, gridR, patchR, patchC = gaze_mask_patches.shape
-
-    # plotting random gaze patches
-    if args.use_plots:
-        gaze.plot_patches(gaze_mask_patches[random_example][0], 1)
-
-    # pooling the last 2 dims of gaze
-    gaze_mask_patches = gaze_mask_patches.mean(dim=(-2, -1))
-    gaze_mask_patches = gaze_mask_patches.view(B, F, gridR * gridR)
-
+    # gaze_mask_patches = gaze.patchify(
+    #     aug_gaze_masks, patch_size=args.spatial_patch_size
+    # )
+    # B, F, gridR, gridR, patchR, patchC = gaze_mask_patches.shape
+    #
+    # # plotting random gaze patches
+    # if args.use_plots:
+    #     gaze.plot_patches(gaze_mask_patches[random_example][0], 1)
+    #
+    # # pooling the last 2 dims of gaze
+    # gaze_mask_patches = gaze_mask_patches.mean(dim=(-2, -1))
+    # gaze_mask_patches = gaze_mask_patches.view(B, F, gridR * gridR)
+    #
     # normalizing
-    gaze_sums = gaze_mask_patches.sum(dim=-1, keepdim=True)
-    gaze_mask_patches = gaze_mask_patches / (gaze_sums + 1e-8)
+    gaze_sums = aug_gaze_masks.sum(dim=(-2, -1), keepdim=True)
+    aug_gaze_masks = aug_gaze_masks / (gaze_sums + 1e-8)
 
-    return aug_observations, gaze_mask_patches
+    return aug_observations, aug_gaze_masks  # gaze_mask_patches
 
 
 def set_seed(seed: int):
