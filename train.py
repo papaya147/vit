@@ -40,7 +40,7 @@ class Config:
     atari_dataset_folder: str = "./atari-dataset"
     use_plots: bool = False
     save_folder: str = "./models"
-    version: int = 4
+    version: int = 3
     seed: int = 42
 
     # gaze
@@ -61,15 +61,15 @@ class Config:
     temporal_heads: int = 4
     inner_dim: int = 32
     mlp_dim: int = 256
-    dropout: float = 0.3
+    dropout: float = 0.1
 
     # hyperparams
     learning_rate: float = 5e-4
     epochs: int = 1000
     train_pct: float = 0.8
     batch_size: int = 32
-    lambda_gaze: float = 10
-    weight_decay: float = 0.1
+    lambda_gaze: float = 1
+    weight_decay: float = 1e-2
     scheduler_factor: float = 0.5
     scheduler_patience: int = 5
     clip_grad_norm: float = 1.0
