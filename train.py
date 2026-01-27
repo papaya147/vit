@@ -229,6 +229,7 @@ def load_checkpoint(
 
 
 def calculate_loss(
+    args: Config,
     model: torch.nn.Module,
     class_weights: torch.Tensor,
     obs: torch.Tensor,
@@ -242,12 +243,14 @@ def calculate_loss(
         policy_loss = Fn.cross_entropy(pred_a, a, weight=class_weights)
 
         # gaze loss
+        _, _, GH, GW = g.shape
+
         cls_attn = cls_attn.mean(dim=2)  # (B, F, T)
         _, F, T = cls_attn.shape
-        root_T = int(math.sqrt(T))
-        cls_attn = cls_attn.view(-1, F, root_T, root_T)
+        cls_attn = cls_attn.view(
+            -1, F, GH // args.spatial_patch_size[0], GW // args.spatial_patch_size[1]
+        )
 
-        _, _, GH, GW = g.shape
         cls_attn = Fn.interpolate(
             cls_attn,
             size=(GH, GW),
@@ -410,7 +413,7 @@ def train(
             optimizer.zero_grad()
 
             pred_a, policy_loss, gaze_loss = calculate_loss(
-                model, class_weights, obs, g, a
+                args, model, class_weights, obs, g, a
             )
             loss = policy_loss + args.lambda_gaze * gaze_loss
 
@@ -437,7 +440,7 @@ def train(
                 a = a.to(device=device)
 
                 pred_a, policy_loss, gaze_loss = calculate_loss(
-                    model, class_weights, obs, g, a
+                    args, model, class_weights, obs, g, a
                 )
                 loss = policy_loss + args.lambda_gaze * gaze_loss
 
