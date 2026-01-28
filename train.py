@@ -54,13 +54,13 @@ class Config:
 
     # transformer arch
     spatial_patch_size: Tuple[int, int] = (6, 6)
-    embedding_dim: int = 128
+    embedding_dim: int = 256
     spatial_depth: int = 2
     temporal_depth: int = 2
     spatial_heads: int = 4
     temporal_heads: int = 4
     inner_dim: int = 32
-    mlp_dim: int = 256
+    mlp_dim: int = 512
     dropout: float = 0.1
 
     # hyperparams
