@@ -267,7 +267,7 @@ def calculate_loss(
 def train(
     args: Config,
     observations: torch.Tensor,
-    gaze_masks: torch.Tensor,
+    gaze_coords: torch.Tensor,
     actions: torch.Tensor,
 ):
     """
@@ -275,7 +275,7 @@ def train(
 
     :param args: Config.
     :param observations: (B, F, C, H, W)
-    :param gaze_masks: (B, F, H, W)
+    :param gaze_coords: (B, F, layers, 2)
     :param actions: (B)
     :return:
     """
@@ -369,7 +369,7 @@ def train(
     val_size = dataset_len - train_size
 
     train_obs, val_obs = observations[:train_size], observations[train_size:]
-    train_gaze, val_gaze = gaze_masks[:train_size], gaze_masks[train_size:]
+    train_gaze, val_gaze = gaze_coords[:train_size], gaze_coords[train_size:]
     train_acts, val_acts = actions[:train_size], actions[train_size:]
 
     train_dataset = TensorDataset(train_obs, train_gaze, train_acts)
