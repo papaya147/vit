@@ -1,3 +1,4 @@
+import datetime
 import math
 import os
 import random
@@ -37,10 +38,9 @@ class Config:
     # paths and flags
     game_index: int = 0
     game: str = ""
-    atari_dataset_folder: str = "../atari-dataset"
+    atari_dataset_folder: str = "./atari-dataset"
     use_plots: bool = False
     save_folder: str = "./models"
-    version: int = 3
     seed: int = 42
 
     # gaze
@@ -349,20 +349,12 @@ def train(
     if wandb_id is None:
         wandb_id = wandb.util.generate_id()
 
-    group_id = (
-        f"v{args.version}_"
-        f"lr{args.learning_rate:.0e}_"
-        f"lam{args.lambda_gaze}_"
-        f"dim{args.embedding_dim}_"
-        f"pt{args.spatial_patch_size[0]}_"
-        f"d{args.dropout}"
-    )
+    date_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     run = wandb.init(
         entity="papaya147-ml",
         project="GABRIL-Atari-ViViT",
         config=args.__dict__,
-        group=group_id,
-        name=f"{args.game}-v{args.version}",
+        name=f"AuxGazeFactorizedViViT_GABRIL-Atari-{args.game}_bs={args.batch_size}_{date_str}",
         job_type="train",
         id=wandb_id,
         resume="allow",
