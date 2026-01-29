@@ -42,7 +42,7 @@ class Config:
     use_plots: bool = False
     save_folder: str = "./models"
     seed: int = 42
-    algorithm: str = "FactorizedViViT"
+    algorithm: str = "AuxGazeFactorizedViViT"
 
     # gaze
     gaze_sigma: int = 15
