@@ -37,7 +37,7 @@ class Config:
     # paths and flags
     game_index: int = 0
     game: str = ""
-    atari_dataset_folder: str = "../atari-dataset"
+    atari_dataset_folder: str = "./atari-dataset"
     use_plots: bool = False
     save_folder: str = "./models"
     version: int = 3
@@ -50,18 +50,19 @@ class Config:
 
     # augmentation
     augment_shift_pad: int = 6
+    augment_color_jitter_intensity: float = 0.2
     augment_noise_std: float = 0.01
 
     # transformer arch
     spatial_patch_size: Tuple[int, int] = (6, 6)
-    embedding_dim: int = 128
-    spatial_depth: int = 2
+    embedding_dim: int = 64
+    spatial_depth: int = 3
     temporal_depth: int = 2
     spatial_heads: int = 4
     temporal_heads: int = 4
     inner_dim: int = 32
     mlp_dim: int = 256
-    dropout: float = 0.1
+    dropout: float = 0.25
 
     # hyperparams
     learning_rate: float = 5e-4
@@ -69,15 +70,16 @@ class Config:
     train_pct: float = 0.8
     batch_size: int = 32
     lambda_gaze: float = 0.1
-    weight_decay: float = 1e-2
+    weight_decay: float = 5e-2
     scheduler_factor: float = 0.5
     scheduler_patience: int = 5
     clip_grad_norm: float = 1.0
-    warmup_epochs: int = 10
+    warmup_epochs: int = 100
     warmup_start_factor: float = 1e-10
     min_learning_rate: float = 1e-6
 
     # testing
+    n_tests: int = 100
     test_episodes: int = 10
     max_episode_length: int = 5000
 
@@ -237,7 +239,9 @@ def calculate_loss(
     a: torch.Tensor,
 ):
     with autocast(device_type="cuda", dtype=torch.float16):
-        pred_a, cls_attn = model(obs)
+        pred_a, cls_attn = model(
+            obs
+        )  # pred_a: (B, n_actions), cls_attn: (B, F, SpatialHeads, T)
 
         # behavior cloning loss
         policy_loss = Fn.cross_entropy(pred_a, a, weight=class_weights)
@@ -249,14 +253,14 @@ def calculate_loss(
         _, F, T = cls_attn.shape
         cls_attn = cls_attn.view(
             -1, F, GH // args.spatial_patch_size[0], GW // args.spatial_patch_size[1]
-        )
+        )  # (B, F, H / PH, W / PW)
 
         cls_attn = Fn.interpolate(
             cls_attn,
             size=(GH, GW),
             mode="bilinear",
             align_corners=False,
-        )
+        )  # (B, F, H, W)
 
         gaze_loss = torch.norm(cls_attn - g, p="fro", dim=(1, 2)) ** 2
         gaze_loss = gaze_loss.mean()
@@ -392,29 +396,22 @@ def train(
         persistent_workers=True,
     )
 
+    test_interval = args.epochs / args.n_tests
+
     for e in range(start_epoch, args.epochs):
-        metrics = {
-            "train_loss": 0,
-            "train_policy_loss": 0,
-            "train_gaze_loss": 0,
-            "train_acc": 0,
-            "val_loss": 0,
-            "val_policy_loss": 0,
-            "val_gaze_loss": 0,
-            "val_acc": 0,
-        }
+        metrics = {}
 
         # train loop
         model.train()
         for obs, g, a in train_loader:
-            obs, g = preprocess(args, obs, g)
-            a = a.to(device=device)
+            obs, g = preprocess(args, obs, g)  # obs: (B, F, C, H, W), g: (B, F, H, W)
+            a = a.to(device=device)  # (B, n_actions)
 
             optimizer.zero_grad()
 
             pred_a, policy_loss, gaze_loss = calculate_loss(
                 args, model, class_weights, obs, g, a
-            )
+            )  # pred_a: (B, n_actions)
             loss = policy_loss + args.lambda_gaze * gaze_loss
 
             scaler.scale(loss).backward()
@@ -432,31 +429,40 @@ def train(
             metrics["train_gaze_loss"] += gaze_loss.item() * curr_batch_size
             metrics["train_acc"] += acc.item()
 
-        # validation
-        model.eval()
-        with torch.no_grad():
-            for obs, g, a in val_loader:
-                obs, g = preprocess(args, obs, g, augment=False)
-                a = a.to(device=device)
+        if e % test_interval == 0:
+            # validation
+            model.eval()
+            with torch.no_grad():
+                for obs, g, a in val_loader:
+                    obs, g = preprocess(
+                        args, obs, g, augment=False
+                    )  # obs: (B, F, C, H, W), g: (B, F, H, W)
+                    a = a.to(device=device)  # (B, n_actions)
 
-                pred_a, policy_loss, gaze_loss = calculate_loss(
-                    args, model, class_weights, obs, g, a
-                )
-                loss = policy_loss + args.lambda_gaze * gaze_loss
+                    pred_a, policy_loss, gaze_loss = calculate_loss(
+                        args, model, class_weights, obs, g, a
+                    )
+                    loss = policy_loss + args.lambda_gaze * gaze_loss
 
-                acc = (pred_a.argmax(dim=1) == a).float().sum()
+                    acc = (pred_a.argmax(dim=1) == a).float().sum()
 
-                curr_batch_size = obs.size(0)
+                    curr_batch_size = obs.size(0)
 
-                metrics["val_loss"] += loss.item() * curr_batch_size
-                metrics["val_policy_loss"] += policy_loss.item() * curr_batch_size
-                metrics["val_gaze_loss"] += gaze_loss.item() * curr_batch_size
-                metrics["val_acc"] += acc.item()
+                    metrics["val_loss"] += loss.item() * curr_batch_size
+                    metrics["val_policy_loss"] += policy_loss.item() * curr_batch_size
+                    metrics["val_gaze_loss"] += gaze_loss.item() * curr_batch_size
+                    metrics["val_acc"] += acc.item()
+
+                    # testing
+                    mean_reward = test_agent(args, model)
+
+                    if mean_reward > best_reward:
+                        best_reward = mean_reward
+                        save_path = f"{args.save_folder}/{args.game}/best_reward.pt"
+                        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                        torch.save(model.state_dict(), save_path)
 
         scheduler.step()
-
-        # testing
-        mean_reward = test_agent(args, model)
 
         log_data = {
             k: v / train_size if "train" in k else v / val_size
@@ -467,12 +473,6 @@ def train(
         log_data["learning_rate"] = optimizer.param_groups[0]["lr"]
 
         run.log(data=log_data)
-
-        if mean_reward > best_reward:
-            best_reward = mean_reward
-            save_path = f"{args.save_folder}/{args.game}/best_reward.pt"
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            torch.save(model.state_dict(), save_path)
 
         save_checkpoint(
             resume_path, e, best_reward, wandb_id, model, optimizer, scaler, scheduler
@@ -491,14 +491,14 @@ def preprocess(
     augment: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Augment the observations and gaze masks. Convert the gaze masks into patches.
+    Augment the observations and gaze masks. # Convert the gaze masks into patches.
     Normalize the gaze patches.
 
     :param args: Config.
     :param observations: (B, F, C, H, W)
-    :param gaze_coords: (B, F, layers, 2)
-    :param augment: Augment the data with random shifts and noise?
-    :return: (B, F, C, H, W), (B, F, T)
+    :param gaze_coords: (B, F, gaze_layers, 2)
+    :param augment: Augment the data with random shifts, color jitter and noise?
+    :return: (B, F, C, H, W), (B, F, H, W)
     """
     B, F, C, H, W = observations.shape
     random_example = random.randint(0, len(observations) - 1)
@@ -509,13 +509,16 @@ def preprocess(
         base_sigma=args.gaze_sigma,
         temporal_decay=args.gaze_alpha,
         blur_growth=args.gaze_beta,
-    )
+    )  # (B, F, H, W)
 
-    aug_observations = observations.to(device=device)
-    aug_gaze_masks = gaze_masks.to(device=device)
+    aug_observations = observations.to(device=device)  # (B, F, C, H, W)
+    aug_gaze_masks = gaze_masks.to(device=device)  # (B, F, H, W)
     if augment:
         aug_observations, aug_gaze_masks = augmentation.random_shift(
             aug_observations, aug_gaze_masks, pad=args.augment_shift_pad
+        )
+        aug_observations = augmentation.random_color_jitter(
+            aug_observations, intensity=args.augment_color_jitter_intensity
         )
         aug_observations, aug_gaze_masks = augmentation.random_noise(
             aug_observations, aug_gaze_masks, std=args.augment_noise_std
@@ -541,7 +544,7 @@ def preprocess(
     #
     # normalizing
     gaze_sums = aug_gaze_masks.sum(dim=(-2, -1), keepdim=True)
-    aug_gaze_masks = aug_gaze_masks / (gaze_sums + 1e-8)
+    aug_gaze_masks = aug_gaze_masks / (gaze_sums + 1e-8)  # (B, F, H, W)
 
     return aug_observations, aug_gaze_masks  # gaze_mask_patches
 
