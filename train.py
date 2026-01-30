@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import torch.nn.functional as Fn
 import torch.optim as optim
+import wandb
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
@@ -25,7 +26,6 @@ from torch.utils.data import DataLoader, TensorDataset
 import augmentation
 import dataset
 import gaze
-import wandb
 from device import device
 from vivit import AuxGazeFactorizedViViT, FactorizedViViT
 
@@ -50,7 +50,7 @@ class Config:
     gaze_alpha: float = 0.7
 
     # augmentation
-    augment_shift_pad: int = 6
+    augment_shift_pad: int = 4
     augment_color_jitter_intensity: float = 0.2
     augment_noise_std: float = 0.01
 
@@ -518,16 +518,21 @@ def preprocess(
 
     aug_observations = observations.to(device=device)  # (B, F, C, H, W)
     aug_gaze_masks = gaze_masks.to(device=device)  # (B, F, H, W)
+
+    rand_n = random.random() * 100
     if augment:
-        aug_observations, aug_gaze_masks = augmentation.random_shift(
-            aug_observations, aug_gaze_masks, pad=args.augment_shift_pad
-        )
-        aug_observations = augmentation.random_color_jitter(
-            aug_observations, intensity=args.augment_color_jitter_intensity
-        )
-        aug_observations, aug_gaze_masks = augmentation.random_noise(
-            aug_observations, aug_gaze_masks, std=args.augment_noise_std
-        )
+        if (25 < rand_n < 32.33) or (50 < rand_n < 66.66) or (75 < rand_n < 100):
+            aug_observations, aug_gaze_masks = augmentation.random_shift(
+                aug_observations, aug_gaze_masks, pad=args.augment_shift_pad
+            )
+        if (32.33 < rand_n < 40.66) or (58.33 < rand_n < 100):
+            aug_observations = augmentation.random_color_jitter(
+                aug_observations, intensity=args.augment_color_jitter_intensity
+            )
+        if (40.66 < rand_n < 58.33) or (66.66 < rand_n < 100):
+            aug_observations, aug_gaze_masks = augmentation.random_noise(
+                aug_observations, aug_gaze_masks, std=args.augment_noise_std
+            )
 
     # plotting random observations and gazes
     if args.use_plots:
