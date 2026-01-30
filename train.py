@@ -521,15 +521,15 @@ def preprocess(
 
     if augment:
         rand_n = random.random() * 100
-        if (25 < rand_n < 32.33) or (50 < rand_n < 66.66) or (75 < rand_n < 100):
+        if (25 < rand_n < 33.33) or (50 < rand_n < 66.66) or (75 < rand_n < 100):
             aug_observations, aug_gaze_masks = augmentation.random_shift(
                 aug_observations, aug_gaze_masks, pad=args.augment_shift_pad
             )
-        if (32.33 < rand_n < 40.66) or (58.33 < rand_n < 100):
+        if (33.33 < rand_n < 41.66) or (58.33 < rand_n < 100):
             aug_observations = augmentation.random_color_jitter(
                 aug_observations, intensity=args.augment_color_jitter_intensity
             )
-        if (40.66 < rand_n < 58.33) or (66.66 < rand_n < 100):
+        if (41.66 < rand_n < 58.33) or (66.66 < rand_n < 100):
             aug_observations, aug_gaze_masks = augmentation.random_noise(
                 aug_observations, aug_gaze_masks, std=args.augment_noise_std
             )
