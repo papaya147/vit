@@ -180,9 +180,9 @@ def plot_frames(frames: torch.Tensor):
             img = np.transpose(img, (1, 2, 0))
 
             if C == 1:
-                ax.imshow(img.squeeze(-1))
+                ax.imshow(img.squeeze(-1), vmin=0, vmax=1)
             else:
-                ax.imshow(img)
+                ax.imshow(img, vmin=0, vmax=1)
 
             ax.set_title(f"Frame {i}")
 

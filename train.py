@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 from typing import Tuple
 
+import albumentations as A
 import ale_py
 import gymnasium as gym
 import numpy as np
@@ -23,7 +24,6 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, TensorDataset
 
-import augmentation
 import dataset
 import gaze
 from device import device
@@ -516,28 +516,58 @@ def preprocess(
         blur_growth=args.gaze_beta,
     )  # (B, F, H, W)
 
-    aug_observations = observations.to(device=device)  # (B, F, C, H, W)
-    aug_gaze_masks = gaze_masks.to(device=device)  # (B, F, H, W)
-
     if augment:
-        rand_n = random.random() * 100
-        if (25 < rand_n < 33.33) or (50 < rand_n < 66.66) or (75 < rand_n < 100):
-            aug_observations, aug_gaze_masks = augmentation.random_shift(
-                aug_observations, aug_gaze_masks, pad=args.augment_shift_pad
-            )
-        if (33.33 < rand_n < 41.66) or (58.33 < rand_n < 100):
-            aug_observations = augmentation.random_color_jitter(
-                aug_observations, intensity=args.augment_color_jitter_intensity
-            )
-        if (41.66 < rand_n < 58.33) or (66.66 < rand_n < 100):
-            aug_observations, aug_gaze_masks = augmentation.random_noise(
-                aug_observations, aug_gaze_masks, std=args.augment_noise_std
-            )
+        observations = observations.permute(0, 1, 3, 4, 2).numpy()  # (B, F, H, W, C)
+        gaze_masks = gaze_masks.unsqueeze(-1).numpy()  # (B, F, H, W, C)
+
+        random_crop = A.Compose(
+            [
+                A.PadIfNeeded(
+                    min_height=84 + 2 * args.augment_shift_pad,
+                    min_width=84 + 2 * args.augment_shift_pad,
+                    p=1.0,
+                ),
+                A.RandomCrop(84, 84, p=1.0),
+            ],
+            p=0.5,
+        )
+        random_color_jitter = A.Compose([A.ColorJitter(p=0.5)])
+        random_noise = A.Compose(
+            [
+                A.GaussNoise(
+                    std_range=(args.augment_noise_std, args.augment_noise_std), p=0.5
+                )
+            ]
+        )
+
+        augment = A.Compose(
+            [
+                random_crop,
+                random_color_jitter,
+                random_noise,
+            ]
+        )
+
+        aug_frames, aug_masks = [], []
+        for i in range(observations.shape[0]):
+            frames = observations[i]
+            masks = gaze_masks[i]
+            augmented = augment(images=frames, masks=masks)
+            aug_frames.append(augmented["images"])
+            aug_masks.append(augmented["masks"])
+
+        observations = torch.from_numpy(np.stack(aug_frames)).permute(
+            0, 1, 4, 2, 3
+        )  # (B, F, C, H, W)
+        gaze_masks = torch.from_numpy(np.stack(aug_masks)).squeeze(-1)  # (B, F, H, W)
+
+    observations = observations.to(device=device)  # (B, F, C, H, W)
+    gaze_masks = gaze_masks.to(device=device)  # (B, F, H, W)
 
     # plotting random observations and gazes
     if args.use_plots:
-        dataset.plot_frames(aug_observations[random_example])
-        dataset.plot_frames(aug_gaze_masks.unsqueeze(2)[random_example])
+        dataset.plot_frames(observations[random_example])
+        dataset.plot_frames(gaze_masks.unsqueeze(2)[random_example])
 
     # gaze_mask_patches = gaze.patchify(
     #     aug_gaze_masks, patch_size=args.spatial_patch_size
@@ -553,10 +583,10 @@ def preprocess(
     # gaze_mask_patches = gaze_mask_patches.view(B, F, gridR * gridR)
     #
     # normalizing
-    gaze_sums = aug_gaze_masks.sum(dim=(-2, -1), keepdim=True)
-    aug_gaze_masks = aug_gaze_masks / (gaze_sums + 1e-8)  # (B, F, H, W)
+    gaze_sums = gaze_masks.sum(dim=(-2, -1), keepdim=True)
+    gaze_masks = gaze_masks / (gaze_sums + 1e-8)  # (B, F, H, W)
 
-    return aug_observations, aug_gaze_masks  # gaze_mask_patches
+    return observations, gaze_masks  # gaze_mask_patches
 
 
 def set_seed(seed: int):
