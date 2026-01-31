@@ -26,6 +26,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import dataset
 import gaze
+from augmentation import Augment
 from device import device
 from vivit import AuxGazeFactorizedViViT, FactorizedViViT
 
@@ -44,15 +45,22 @@ class Config:
     seed: int = 42
     algorithm: str = "AuxGazeFactorizedViViT"
 
+    frame_stack: int = 4
+
     # gaze
     gaze_sigma: int = 15
     gaze_beta: float = 0.99
     gaze_alpha: float = 0.7
 
     # augmentation
-    augment_shift_pad: int = 4
-    augment_color_jitter_intensity: float = 0.2
+    augment_crop_padding: int = 4
+    augment_light_intensity: float = 0.2
     augment_noise_std: float = 0.01
+    augment_p_pixel_dropout: float = 0.01
+    augment_posterize_bits: int = 4
+    augment_blur_pixels: int = 2
+    augment_p_spatial_corruptions: float = 0.5
+    augment_p_temporal_corruptions: float = 0.25
 
     # transformer arch
     spatial_patch_size: Tuple[int, int] = (6, 6)
@@ -518,55 +526,29 @@ def preprocess(
         blur_growth=args.gaze_beta,
     )  # (B, F, H, W)
 
+    # pre augmentation plots
+    if args.use_plots:
+        dataset.plot_frames(observations[random_example])
+        dataset.plot_frames(gaze_masks.unsqueeze(2)[random_example])
+
     if augment:
-        observations = observations.permute(0, 1, 3, 4, 2).numpy()  # (B, F, H, W, C)
-        gaze_masks = gaze_masks.unsqueeze(-1).numpy()  # (B, F, H, W, C)
-
-        random_crop = A.Compose(
-            [
-                A.PadIfNeeded(
-                    min_height=84 + 2 * args.augment_shift_pad,
-                    min_width=84 + 2 * args.augment_shift_pad,
-                    p=1.0,
-                ),
-                A.RandomCrop(84, 84, p=1.0),
-            ],
-            p=0.5,
+        augment = Augment(
+            frame_shape=(F, C, H, W),
+            crop_padding=args.augment_crop_padding,
+            light_intensity=args.augment_light_intensity,
+            noise_std=args.augment_noise_std,
+            p_pixel_dropout=args.augment_p_pixel_dropout,
+            posterize_bits=args.augment_posterize_bits,
+            blur_pixels=args.augment_blur_pixels,
+            p_spatial_corruption=args.augment_p_spatial_corruptions,
+            p_temporal_corruption=args.augment_p_temporal_corruptions,
         )
-        random_color_jitter = A.Compose([A.ColorJitter(p=0.5)])
-        random_noise = A.Compose(
-            [
-                A.GaussNoise(
-                    std_range=(args.augment_noise_std, args.augment_noise_std), p=0.5
-                )
-            ]
-        )
-
-        augment = A.Compose(
-            [
-                random_crop,
-                random_color_jitter,
-                random_noise,
-            ]
-        )
-
-        aug_frames, aug_masks = [], []
-        for i in range(observations.shape[0]):
-            frames = observations[i]
-            masks = gaze_masks[i]
-            augmented = augment(images=frames, masks=masks)
-            aug_frames.append(augmented["images"])
-            aug_masks.append(augmented["masks"])
-
-        observations = torch.from_numpy(np.stack(aug_frames)).permute(
-            0, 1, 4, 2, 3
-        )  # (B, F, C, H, W)
-        gaze_masks = torch.from_numpy(np.stack(aug_masks)).squeeze(-1)  # (B, F, H, W)
+        observations, gaze_masks = augment(observations, gaze_masks)
 
     observations = observations.to(device=device)  # (B, F, C, H, W)
     gaze_masks = gaze_masks.to(device=device)  # (B, F, H, W)
 
-    # plotting random observations and gazes
+    # # post augmentation plots
     if args.use_plots:
         dataset.plot_frames(observations[random_example])
         dataset.plot_frames(gaze_masks.unsqueeze(2)[random_example])
@@ -619,8 +601,9 @@ def main():
 
     observations, gaze_coords, actions = dataset.load_data(
         f"{args.atari_dataset_folder}/{args.game}",
-        device="cpu",
+        frame_stack=args.frame_stack,
         gaze_temporal_decay=args.gaze_alpha,
+        device="cpu",
     )
 
     train(args, observations, gaze_coords, actions)
