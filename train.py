@@ -270,10 +270,27 @@ def calculate_loss(
             mode="bilinear",
             align_corners=False,
         )  # (B, F, H, W)
-        current_sum = cls_attn.sum(dim=(2, 3), keepdim=True) + 1e-8
-        cls_attn = cls_attn / current_sum
 
-        gaze_loss = torch.norm(cls_attn - g, p="fro", dim=(1, 2)) ** 2
+        # current_sum = cls_attn.sum(dim=(2, 3), keepdim=True) + 1e-8
+        # cls_attn = cls_attn / current_sum
+        #
+        # gaze_loss = torch.norm(cls_attn - g, p="fro", dim=(1, 2)) ** 2
+        # gaze_loss = gaze_loss.mean()
+
+        B, F, H, W = cls_attn.shape
+        cls_attn_flat = cls_attn.view(B * F, -1)
+        gaze_flat = g.view(B * F, -1)
+
+        eps = 1e-8
+        cls_attn_flat = cls_attn_flat + eps
+        gaze_flat = gaze_flat + eps
+
+        cls_attn_flat = cls_attn_flat / cls_attn_flat.sum(dim=1, keepdim=True)
+        gaze_flat = gaze_flat / gaze_flat.sum(dim=1, keepdim=True)
+
+        gaze_loss = torch.sum(
+            gaze_flat * (torch.log(gaze_flat) - torch.log(cls_attn_flat)), dim=1
+        )
         gaze_loss = gaze_loss.mean()
 
         return pred_a, policy_loss, gaze_loss
