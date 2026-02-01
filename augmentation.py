@@ -79,7 +79,7 @@ class Augment:
                 A.Pad(padding=crop_padding, p=1.0),
                 A.RandomCrop(84, 84, p=1.0),
             ],
-            p=1.0,
+            p=p_spatial_corruption,
         )
 
         light = A.Compose(
@@ -109,8 +109,6 @@ class Augment:
             blur_limit=(blur_pixels, blur_pixels), p=p_spatial_corruption
         )
 
-        spatial_corruptions = [light, noise, pixel_drop, posterize, blur]
-
         frame_drop = A.Lambda(image=RandomFrameDropout(F), name="frame_drop", p=1.0)
 
         temporal_corruptions = [frame_drop]
@@ -118,13 +116,8 @@ class Augment:
         self.augment = A.Compose(
             [
                 crop,
-                # A.OneOf(spatial_corruptions, p=p_spatial_corruption),
-                # A.OneOf(temporal_corruptions, p=p_temporal_corruption),
                 light,
-                noise,
-                pixel_drop,
-                posterize,
-                blur,
+                A.OneOf([noise, pixel_drop, posterize, blur], p=p_spatial_corruption),
             ],
         )
 
